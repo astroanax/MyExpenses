@@ -1,3 +1,5 @@
+(this is a fork of the app that makes all features free)
+
 MyExpenses
 ==========
 
