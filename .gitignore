@@ -6,3 +6,5 @@ local.properties
 fastlane
 ChangeLog.install
 google-services.json
+no-license.base64.txt
+no-license.keystore
