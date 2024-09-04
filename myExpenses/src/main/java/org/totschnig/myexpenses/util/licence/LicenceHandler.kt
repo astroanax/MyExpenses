@@ -128,8 +128,8 @@ open class LicenceHandler(
     fun hasAccessTo(feature: ContribFeature) =
         isEnabledFor(feature.licenceStatus) || addOnFeatures.contains(feature)
 
-    open fun isEnabledFor(licenceStatus: LicenceStatus) =
-        (this.licenceStatus?.compareTo(licenceStatus) ?: -1) >= 0
+    open fun isEnabledFor(licenceStatus: LicenceStatus) = true
+        //(this.licenceStatus?.compareTo(licenceStatus) ?: -1) >= 0
 
     val isUpgradeable: Boolean
         get() = licenceStatus?.isUpgradeable ?: true
