@@ -1,7 +1,11 @@
 name: Sync fork with upstream
 on:
-  schedule:
-    - cron: "0 0 */1 * *" # Every day
+  push:
+    # branches: [ "master" ]
+    tags:
+      - '*'
+  #schedule:
+  #- cron: "0 0 */1 * *" # Every day
   workflow_dispatch: # Allow manual triggering via Web UI to test.
 
 jobs:
