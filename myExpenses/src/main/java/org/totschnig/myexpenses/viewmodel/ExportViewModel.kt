@@ -3,6 +3,7 @@ package org.totschnig.myexpenses.viewmodel
 import android.app.Application
 import android.net.Uri
 import android.os.Bundle
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.liveData
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,6 +29,8 @@ import org.totschnig.myexpenses.provider.DataBaseAccount.Companion.AGGREGATE_HOM
 import org.totschnig.myexpenses.provider.DatabaseConstants
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_CURRENCY
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_ROWID
+import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_STATUS
+import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_EXPORTED
 import org.totschnig.myexpenses.provider.TransactionProvider
 import org.totschnig.myexpenses.provider.filter.KEY_FILTER
 import org.totschnig.myexpenses.provider.filter.WhereFilter
@@ -63,10 +66,10 @@ class ExportViewModel(application: Application) : ContentResolvingAndroidViewMod
     }
 
     private val _publishProgress: MutableSharedFlow<String?> = MutableSharedFlow()
-    private val _result: MutableStateFlow<Pair<ExportFormat, List<Uri>>?> = MutableStateFlow(null)
+    private val _result: MutableStateFlow<Pair<ExportFormat, List<DocumentFile>>?> = MutableStateFlow(null)
     private val _pdfResult: MutableStateFlow<Result<Pair<Uri, String>>?> = MutableStateFlow(null)
     val publishProgress: SharedFlow<String?> = _publishProgress
-    val result: StateFlow<Pair<ExportFormat, List<Uri>>?> = _result
+    val result: StateFlow<Pair<ExportFormat, List<DocumentFile>>?> = _result
     val pdfResult: StateFlow<Result<Pair<Uri, String>>?> = _pdfResult
 
     fun startExport(args: Bundle) {
@@ -192,12 +195,8 @@ class ExportViewModel(application: Application) : ContentResolvingAndroidViewMod
                                         )
                                     }, append)
                                     result.onSuccess {
-                                        if (!append && prefHandler.getBoolean(
-                                                PrefKey.PERFORM_SHARE,
-                                                false
-                                            )
-                                        ) {
-                                            add(it.uri)
+                                        if (!append) {
+                                            add(it)
                                         }
                                         successfullyExported.add(account)
                                         publishProgress(
@@ -273,13 +272,13 @@ class ExportViewModel(application: Application) : ContentResolvingAndroidViewMod
     fun hasExported(account: DataBaseAccount) = liveData(coroutineDispatcher) {
         contentResolver.query(
             account.uriForTransactionList(extended = false),
-            arrayOf("max(" + DatabaseConstants.KEY_STATUS + ")"),
-            null,
+            arrayOf("count(*)"),
+            "$KEY_STATUS = $STATUS_EXPORTED",
             null,
             null
         )?.use {
             it.moveToFirst()
-            emit(it.getLong(0) == 1L)
+            emit(it.getInt(0) > 0)
         }
     }
 

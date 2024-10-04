@@ -28,6 +28,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.webkit.MimeTypeMap
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
@@ -110,11 +111,13 @@ import org.totschnig.myexpenses.preference.PrefKey
 import org.totschnig.myexpenses.provider.DatabaseConstants
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_COLOR
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_URI
+import org.totschnig.myexpenses.provider.filter.FilterPersistence
 import org.totschnig.myexpenses.provider.maybeRepairRequerySchema
 import org.totschnig.myexpenses.service.PlanExecutor.Companion.enqueueSelf
 import org.totschnig.myexpenses.sync.GenericAccountService
 import org.totschnig.myexpenses.ui.AmountInput
 import org.totschnig.myexpenses.ui.SnackbarAction
+import org.totschnig.myexpenses.util.AppDirHelper.ensureContentUri
 import org.totschnig.myexpenses.util.ColorUtils.isBrightColor
 import org.totschnig.myexpenses.util.NotificationBuilderWrapper
 import org.totschnig.myexpenses.util.PermissionHelper
@@ -144,6 +147,7 @@ import java.io.Serializable
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalTime
+import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.sign
 
@@ -1058,6 +1062,26 @@ abstract class BaseActivity : AppCompatActivity(), MessageDialogFragment.Message
         }
     }
 
+    fun startActionView(uri: Uri, mimeType: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(
+                    ensureContentUri(uri, this@BaseActivity),
+                    mimeType
+                )
+                setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            )
+        } catch (e: ActivityNotFoundException) {
+            showSnackBar(MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(mimeType)
+                ?.uppercase(Locale.getDefault())
+                ?.let { getString(R.string.no_app_handling_mime_type_available, it) }
+                ?: "No activity found for opening $uri"
+            )
+        }
+    }
+
     @JvmOverloads
     open fun showMessage(
         message: CharSequence,
@@ -1286,9 +1310,20 @@ abstract class BaseActivity : AppCompatActivity(), MessageDialogFragment.Message
         }
     }
 
-    fun showDetails(transactionId: Long, fullScreen: Boolean = false) {
+    fun showDetails(
+        transactionId: Long,
+        fullScreen: Boolean = false,
+        currentFilter: FilterPersistence? = null,
+        sortOrder: String? = null
+    ) {
         lifecycleScope.launchWhenResumed {
-            TransactionDetailFragment.show(transactionId, supportFragmentManager, fullScreen)
+            TransactionDetailFragment.show(
+                transactionId,
+                supportFragmentManager,
+                fullScreen,
+                currentFilter,
+                sortOrder
+            )
         }
     }
 

@@ -77,7 +77,6 @@ import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_USAGES
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_UUID
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_YEAR
 import org.totschnig.myexpenses.provider.DatabaseConstants.NULL_ROW_ID
-import org.totschnig.myexpenses.provider.DatabaseConstants.SPLIT_CATID
 import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_UNCOMMITTED
 import org.totschnig.myexpenses.provider.DatabaseConstants.TABLE_ACCOUNTS
 import org.totschnig.myexpenses.provider.DatabaseConstants.TABLE_ACCOUNT_EXCHANGE_RATES
@@ -111,7 +110,7 @@ private fun requireIdParameter(parameter: String) {
 
 /**
  * - with parameter QUERY_PARAMETER_TRANSACTION_ID_LIST return requested ids
- * - with parameter KEY_TRANSACTIONID return the transaction and its split parts
+ * - with parameter KEY_TRANSACTIONID return the transaction
  *   (used from Transaction Detail Fragment)
  * - with parameter KEY_PARENTID return just the split parts
  *   (used from Edit split)
@@ -121,10 +120,10 @@ val Uri.transactionQuerySelector: String
     get() = getQueryParameter(QUERY_PARAMETER_TRANSACTION_ID_LIST)?.let { idList ->
         idList.split(',').forEach { requireIdParameter(it.trim()) }
         "$KEY_ROWID IN ($idList)"
-    } ?:  getQueryParameter(KEY_TRANSACTIONID)?.let {
+    } ?: getQueryParameter(KEY_TRANSACTIONID)?.let {
         requireIdParameter(it)
-        "($KEY_ROWID = $it OR $KEY_PARENTID = $it)"
-    } ?:  getQueryParameter(KEY_PARENTID)?.let {
+        "$KEY_ROWID = $it"
+    } ?: getQueryParameter(KEY_PARENTID)?.let {
         requireIdParameter(it)
         "$KEY_PARENTID = $it"
     } ?: accountSelector
@@ -143,28 +142,24 @@ val Uri.templateQuerySelector: String?
  */
 
 val Uri.accountSelector: String
-    get() =
-        KEY_ACCOUNTID + (
-                getQueryParameter(KEY_ACCOUNTID)?.let {
-                    requireIdParameter(it)
-                    "= $it"
-                }
-                    ?: (" IN (SELECT $KEY_ROWID FROM $TABLE_ACCOUNTS WHERE $KEY_EXCLUDE_FROM_TOTALS=0 " +
-                            (getQueryParameter(KEY_CURRENCY)?.let {
-                                "AND $KEY_CURRENCY = '$it'"
-                            } ?: "") +
-                            ")"
-                            )
-                )
+    get() = KEY_ACCOUNTID + (
+            getQueryParameter(KEY_ACCOUNTID)?.let {
+                requireIdParameter(it)
+                "= $it"
+            } ?: (" IN (SELECT $KEY_ROWID FROM $TABLE_ACCOUNTS WHERE $KEY_EXCLUDE_FROM_TOTALS=0 " +
+                    (getQueryParameter(KEY_CURRENCY)?.let {
+                        "AND $KEY_CURRENCY = '$it'"
+                    } ?: "") + ")")
+            )
 
 fun Uri.amountCalculation(tableName: String, homeCurrency: String): String =
     (if (getQueryParameter(KEY_ACCOUNTID) != null || getQueryParameter(KEY_CURRENCY) != null)
         KEY_AMOUNT else getAmountHomeEquivalent(tableName, homeCurrency))
 
-fun checkSealedWithAlias(baseTable: String, innerTable: String) =
+fun checkSealedWithAlias(baseTable: String) =
     "max(" + checkForSealedAccount(
         baseTable,
-        innerTable
+        TABLE_TRANSACTIONS
     ) + ", " + checkForSealedDebt(baseTable) + ") AS " + KEY_SEALED
 
 /**
@@ -263,8 +258,8 @@ fun categoryTreeWithSum(
         when (it) {
             KEY_SUM -> buildString {
                 val amountStatement = if (aggregateNeutral) KEY_DISPLAY_AMOUNT else
-                    //the ELSE in the CASE statement is FLAG_NEUTRAL because the categoryTreeCTE
-                    // returns categories which are either the requested type or neutral
+                //the ELSE in the CASE statement is FLAG_NEUTRAL because the categoryTreeCTE
+                // returns categories which are either the requested type or neutral
                     "CASE $KEY_TYPE WHEN $type THEN $KEY_DISPLAY_AMOUNT ELSE ${if (incomeType) "max" else "min"}($KEY_DISPLAY_AMOUNT, 0) END"
                 append("(SELECT $aggregateFunction($amountStatement) FROM amounts ")
                 append(") AS $KEY_SUM")
@@ -607,13 +602,13 @@ fun tagGroupBy(tableName: String): String =
 fun buildTransactionRowSelect(filter: WhereFilter?) =
     "SELECT $KEY_ROWID from $TABLE_TRANSACTIONS WHERE $KEY_ACCOUNTID = ?" +
             if (filter?.isEmpty == false) {
-                " AND ${filter.getSelectionForParents(TABLE_TRANSACTIONS, true)}"
+                " AND ${filter.getSelectionForParents(TABLE_TRANSACTIONS)}"
             } else ""
 
-fun transactionListAsCTE(catId: String) =
+fun transactionListAsCTE(catId: String, forHome: String?) =
     getCategoryTreeForView("$KEY_ROWID = $catId", false) +
-            ", $VIEW_COMMITTED AS (" +
-            transactionsJoin() +
+            ", $CTE_SEARCH AS (" +
+            transactionsJoin(withDisplayAmount = true, forHome = forHome) +
             " WHERE $KEY_STATUS != $STATUS_UNCOMMITTED " +
             tagGroupBy(TABLE_TRANSACTIONS) +
             ")"
@@ -623,11 +618,16 @@ fun buildViewDefinition(tableName: String) =
 
 private fun transactionsJoin(
     tableName: String = TABLE_TRANSACTIONS,
-    withPlanInstance: Boolean = tableName == TABLE_TRANSACTIONS
+    withPlanInstance: Boolean = tableName == TABLE_TRANSACTIONS,
+    withDisplayAmount: Boolean = false,
+    forHome: String? = null
 ) = buildString {
     append(" SELECT $tableName.*, Tree.$KEY_PATH, Tree.$KEY_ICON, Tree.$KEY_TYPE,  $TABLE_PAYEES.$KEY_PAYEE_NAME, $TABLE_METHODS.$KEY_LABEL AS $KEY_METHOD_LABEL, $TABLE_METHODS.$KEY_ICON AS $KEY_METHOD_ICON")
     if (withPlanInstance) {
         append(", $TABLE_PLAN_INSTANCE_STATUS.$KEY_TEMPLATEID")
+    }
+    if (withDisplayAmount) {
+        append(", ${getAmountCalculation(forHome, tableName)} AS $KEY_DISPLAY_AMOUNT")
     }
     append(", $TAG_LIST_EXPRESSION")
     append(", $KEY_CURRENCY")
@@ -646,6 +646,13 @@ private fun transactionsJoin(
 
 const val CTE_TRANSACTION_GROUPS = "cte_transaction_groups"
 const val CTE_TRANSACTION_AMOUNTS = "cte_amounts"
+const val CTE_SEARCH = "cte_search"
+
+fun buildSearchCte(
+    forTable: String,
+    forHome: String?
+) = "WITH $CTE_SEARCH AS (SELECT *, ${getAmountCalculation(forHome, forTable)} AS $KEY_DISPLAY_AMOUNT FROM $forTable)"
+
 
 fun buildTransactionGroupCte(
     selection: String,
@@ -660,7 +667,7 @@ fun buildTransactionGroupCte(
         append(",")
         append("$typeWithFallBack AS $KEY_TYPE")
         append(", cast(CASE WHEN $KEY_CR_STATUS = '${CrStatus.VOID.name}' THEN 0 ELSE ")
-        append(getAmountCalculation(forHome))
+        append(getAmountCalculation(forHome, VIEW_WITH_ACCOUNT))
         append(" END AS integer) AS $KEY_DISPLAY_AMOUNT")
         append(" FROM $VIEW_WITH_ACCOUNT")
         append(" WHERE $WHERE_NOT_SPLIT AND $WHERE_NOT_ARCHIVED AND $selection)")

@@ -88,7 +88,6 @@ import org.totschnig.myexpenses.util.Utils;
 import org.totschnig.myexpenses.util.crashreporting.CrashHandler;
 
 import java.io.File;
-import java.time.LocalDateTime;
 import java.util.Locale;
 
 import timber.log.Timber;
@@ -528,6 +527,7 @@ public class TransactionDatabase extends BaseTransactionDatabase {
     db.execSQL(ACCOUNT_REMAP_TRANSFER_TRIGGER_CREATE);
 
     createOrRefreshCategoryHierarchyTrigger(db);
+    createArchiveTriggers(db);
 
     db.execSQL(PARTY_HIERARCHY_TRIGGER);
 
@@ -2099,6 +2099,14 @@ public class TransactionDatabase extends BaseTransactionDatabase {
 
       if (oldVersion < 168) {
         upgradeTo168(db);
+      }
+
+      if (oldVersion < 169) {
+        upgradeTo169(db);
+      }
+
+      if (oldVersion < 170) {
+        upgradeTo170(db);
       }
 
       TransactionProvider.resumeChangeTrigger(db);

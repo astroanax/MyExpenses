@@ -21,7 +21,6 @@ import static org.totschnig.myexpenses.provider.ArchiveKt.archive;
 import static org.totschnig.myexpenses.provider.ArchiveKt.canBeArchived;
 import static org.totschnig.myexpenses.provider.ArchiveKt.unarchive;
 import static org.totschnig.myexpenses.provider.DataBaseAccount.HOME_AGGREGATE_ID;
-import static org.totschnig.myexpenses.provider.DatabaseConstants.IS_SAME_CURRENCY;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_ACCOUNTID;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_AMOUNT;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_ATTACHMENT_ID;
@@ -56,7 +55,6 @@ import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_SORT_DIREC
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_SORT_KEY;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_STATUS;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_SUM;
-import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_SYNC_ACCOUNT_NAME;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_SYNC_SEQUENCE_LOCAL;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_TAGID;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_TEMPLATEID;
@@ -108,8 +106,11 @@ import static org.totschnig.myexpenses.provider.DatabaseConstants.WHERE_DEPENDEN
 import static org.totschnig.myexpenses.provider.DatabaseConstants.WHERE_NOT_SPLIT;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.WHERE_SELF_OR_PEER;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.WHERE_SELF_OR_RELATED;
+import static org.totschnig.myexpenses.provider.DbConstantsKt.CTE_SEARCH;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.budgetAllocation;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.budgetSelect;
+import static org.totschnig.myexpenses.provider.DbConstantsKt.buildSearchCte;
+import static org.totschnig.myexpenses.provider.DbConstantsKt.categoryPathFromLeave;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.categoryTreeSelect;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.categoryTreeWithMappedObjects;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.categoryTreeWithSum;
@@ -118,7 +119,7 @@ import static org.totschnig.myexpenses.provider.DbConstantsKt.getAccountSelector
 import static org.totschnig.myexpenses.provider.DbConstantsKt.getPayeeWithDuplicatesCTE;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.getTemplateQuerySelector;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.getTransactionQuerySelector;
-import static org.totschnig.myexpenses.provider.DbConstantsKt.grandTotalAccountKeepTransferPartCriterion;
+import static org.totschnig.myexpenses.provider.DbConstantsKt.transactionListAsCTE;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.transactionMappedObjectQuery;
 import static org.totschnig.myexpenses.provider.DbConstantsKt.transactionSumQuery;
 import static org.totschnig.myexpenses.provider.MoreDbUtilsKt.computeWhere;
@@ -327,6 +328,7 @@ public class TransactionProvider extends BaseTransactionProvider {
   public static final String QUERY_PARAMETER_HIERARCHICAL = "hierarchical";
   public static final String QUERY_PARAMETER_CATEGORY_SEPARATOR = "categorySeparator";
   public static final String QUERY_PARAMETER_SHORTEN_COMMENT = "shortenComment";
+  public static final String QUERY_PARAMETER_SEARCH = "search";
 
   /**
    * 1 -> mapped objects for each row
@@ -398,6 +400,7 @@ public class TransactionProvider extends BaseTransactionProvider {
     String groupBy = uri.getQueryParameter(QUERY_PARAMETER_GROUP_BY);
     String having = null;
     String limit = null;
+    String cte = null;
     Bundle extras = new Bundle();
 
     String aggregateFunction = getAggregateFunction();
@@ -419,27 +422,33 @@ public class TransactionProvider extends BaseTransactionProvider {
           c = measureAndLogQuery(db, uri, sql, selection, selectionArgs);
           return c;
         }
+        boolean hasSearch = uri.getBooleanQueryParameter(QUERY_PARAMETER_SEARCH, false);
         String selector = getTransactionQuerySelector(uri);
         selection = TextUtils.isEmpty(selection) ? selector : selection + " AND " + selector;
         String forCatId = uri.getQueryParameter(KEY_CATID);
         boolean extended = uri.getQueryParameter(QUERY_PARAMETER_EXTENDED) != null;
+        String table = extended ? VIEW_EXTENDED : VIEW_COMMITTED;
         if (projection == null) {
           projection = extended ? DatabaseConstants.getProjectionExtended() : DatabaseConstants.getProjectionBase();
-        }
-        if (uri.getBooleanQueryParameter(QUERY_PARAMETER_SHORTEN_COMMENT, false)) {
-          projection = Companion.shortenComment(projection);
         }
         if (sortOrder == null) {
           sortOrder = KEY_DATE + " DESC";
         }
+        String forHome = uri.getQueryParameter(KEY_ACCOUNTID) == null && uri.getQueryParameter(KEY_CURRENCY) == null && uri.getQueryParameter(KEY_PARENTID) == null ? getHomeCurrency() : null;
         if (forCatId != null) {
-          String sql = DbConstantsKt.transactionListAsCTE(forCatId) + " " + SupportSQLiteQueryBuilder.builder(VIEW_COMMITTED).columns(projection)
+          projection = prepareProjection(projection, table, uri.getBooleanQueryParameter(QUERY_PARAMETER_SHORTEN_COMMENT, false), false);
+          String sql = transactionListAsCTE(forCatId, forHome) + " " + SupportSQLiteQueryBuilder.builder(CTE_SEARCH).columns(projection)
                   .selection(computeWhere(selection, KEY_CATID + " IN (SELECT " + KEY_ROWID + " FROM Tree )"), selectionArgs).groupBy(groupBy)
                   .orderBy(sortOrder).create().getSql();
           c = measureAndLogQuery(db, uri, sql, selection, selectionArgs);
           return c;
         }
-        qb = SupportSQLiteQueryBuilder.builder((extended ? VIEW_EXTENDED : VIEW_COMMITTED));
+        if (hasSearch) {
+            cte = buildSearchCte(table, forHome);
+            table = CTE_SEARCH;
+        }
+        projection = prepareProjection(projection, table, uri.getBooleanQueryParameter(QUERY_PARAMETER_SHORTEN_COMMENT, false), !hasSearch);
+        qb = SupportSQLiteQueryBuilder.builder(table);
         if (uri.getQueryParameter(QUERY_PARAMETER_DISTINCT) != null) {
           qb.distinct();
         }
@@ -452,6 +461,7 @@ public class TransactionProvider extends BaseTransactionProvider {
         break;
       case TRANSACTION_ID:
         qb = SupportSQLiteQueryBuilder.builder(VIEW_ALL);
+        projection = prepareProjection(projection, VIEW_ALL, false, true);
         additionalWhere.append(KEY_ROWID + "=").append(uri.getPathSegments().get(1));
         break;
       case TRANSACTIONS_SUMS: {
@@ -513,7 +523,7 @@ public class TransactionProvider extends BaseTransactionProvider {
       case CATEGORY_ID:
         String rowId = uri.getPathSegments().get(1);
         if (uri.getBooleanQueryParameter(QUERY_PARAMETER_HIERARCHICAL, false)) {
-          c = measureAndLogQuery(db, uri, DbConstantsKt.categoryPathFromLeave(rowId), selection, selectionArgs);
+          c = measureAndLogQuery(db, uri, categoryPathFromLeave(rowId), selection, selectionArgs);
           c.setNotificationUri(getContext().getContentResolver(), uri);
           return c;
         } else {
@@ -888,7 +898,7 @@ public class TransactionProvider extends BaseTransactionProvider {
         throw unknownUri(uri);
     }
 
-    c = measureAndLogQuery(qb, uri, db, projection, computeWhere(selection, additionalWhere), selectionArgs, groupBy, having, sortOrder, limit);
+    c = measureAndLogQuery(qb, uri, db, projection, computeWhere(selection, additionalWhere), selectionArgs, groupBy, having, sortOrder, limit, cte);
 
     c = wrapWithResultCompat(c, extras);
 
@@ -1561,12 +1571,13 @@ public class TransactionProvider extends BaseTransactionProvider {
         mergeCategories(getHelper().getWritableDatabase(), Objects.requireNonNull(extras));
         notifyChange(CATEGORIES_URI, false);
         notifyChange(TRANSACTIONS_URI, false);
-        return null;
       }
       case METHOD_ARCHIVE -> {
-        archive(getHelper().getWritableDatabase(), Objects.requireNonNull(extras));
+        Bundle result = new Bundle(1);
+        result.putLong(KEY_TRANSACTIONID, archive(getHelper().getWritableDatabase(), Objects.requireNonNull(extras)));
         notifyChange(TRANSACTIONS_URI, true);
         notifyChange(ACCOUNTS_URI, false);
+        return result;
       }
       case METHOD_CAN_BE_ARCHIVED -> {
          Bundle result = new Bundle(1);

@@ -1,19 +1,22 @@
 package org.totschnig.myexpenses.provider
 
 import android.net.Uri
-import org.totschnig.myexpenses.model.Grouping
 import org.totschnig.myexpenses.model.SortDirection
 import org.totschnig.myexpenses.model2.AccountInfoWithGrouping
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_ACCOUNTID
+import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_AMOUNT
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_CURRENCY
+import org.totschnig.myexpenses.provider.TransactionProvider.EXTENDED_URI
+import org.totschnig.myexpenses.provider.TransactionProvider.QUERY_PARAMETER_SEARCH
+import org.totschnig.myexpenses.provider.TransactionProvider.QUERY_PARAMETER_SHORTEN_COMMENT
+import org.totschnig.myexpenses.provider.TransactionProvider.TRANSACTIONS_URI
 
 /**
  * groups databaseSpecific information
  */
 abstract class DataBaseAccount : AccountInfoWithGrouping {
     abstract val id: Long
-    abstract override val currency: String
-    abstract override val grouping: Grouping
+    abstract val sortBy: String
     abstract val sortDirection: SortDirection
 
     override val accountId: Long
@@ -22,6 +25,9 @@ abstract class DataBaseAccount : AccountInfoWithGrouping {
     val isHomeAggregate get() = isHomeAggregate(id)
 
     val isAggregate get() = isAggregate(id)
+
+    val sortOrder: String
+        get() = "${sortBy.let { if (it == KEY_AMOUNT) "abs($it)" else it }} $sortDirection"
 
     fun uriForTransactionList(
         shortenComment: Boolean = false,
@@ -74,14 +80,18 @@ abstract class DataBaseAccount : AccountInfoWithGrouping {
             shortenComment: Boolean,
             extended: Boolean = true
         ): Uri.Builder =
-            (if (extended) TransactionProvider.EXTENDED_URI else TransactionProvider.TRANSACTIONS_URI)
+            (if (extended) EXTENDED_URI else TRANSACTIONS_URI)
                 .buildUpon().apply {
                     if (shortenComment) {
                         appendQueryParameter(
-                            TransactionProvider.QUERY_PARAMETER_SHORTEN_COMMENT,
+                            QUERY_PARAMETER_SHORTEN_COMMENT,
                             "1"
                         )
                     }
+                    appendQueryParameter(
+                        QUERY_PARAMETER_SEARCH,
+                        "1"
+                    )
                 }
     }
 }

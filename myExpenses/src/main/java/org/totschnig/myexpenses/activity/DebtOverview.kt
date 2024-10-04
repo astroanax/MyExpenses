@@ -4,12 +4,16 @@ import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.viewModels
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -27,18 +31,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.totschnig.myexpenses.R
 import org.totschnig.myexpenses.compose.AppTheme
+import org.totschnig.myexpenses.compose.ColoredAmountText
 import org.totschnig.myexpenses.compose.DebtCard
 import org.totschnig.myexpenses.compose.LocalHomeCurrency
 import org.totschnig.myexpenses.databinding.ActivityComposeBinding
 import org.totschnig.myexpenses.model.CurrencyUnit
 import org.totschnig.myexpenses.model.Money
+import org.totschnig.myexpenses.model.Sort
 import org.totschnig.myexpenses.util.formatMoney
 import org.totschnig.myexpenses.util.toEpoch
 import org.totschnig.myexpenses.viewmodel.DebtOverViewViewModel
 import org.totschnig.myexpenses.viewmodel.DebtViewModel
 import org.totschnig.myexpenses.viewmodel.DebtViewModel.Transaction
-import org.totschnig.myexpenses.viewmodel.data.Debt
-import timber.log.Timber
+import org.totschnig.myexpenses.viewmodel.data.DisplayDebt
 import java.time.LocalDate
 
 class DebtOverview : DebtActivity() {
@@ -52,30 +57,65 @@ class DebtOverview : DebtActivity() {
         setContentView(binding.root)
         setupToolbar()
         binding.composeView.setContent {
-            val debts = debts.collectAsState()
+            val debtsInfo = debts.collectAsState()
+
             AppTheme {
                 val homeCurrency = LocalHomeCurrency.current
-                LaunchedEffect(debts.value) {
-                    val total = debts.value.sumOf { it.currentEquivalentBalance }
+                val (sort, debts) = debtsInfo.value
+
+                LaunchedEffect(debts) {
+                    val total = debts.sumOf { it.currentEquivalentBalance }
                     toolbar.subtitle = currencyFormatter.formatMoney(
                         Money(homeCurrency, total)
                     )
                     setSignedToolbarColor(total)
                 }
-                DebtList(
-                    debts = debts,
-                    loadTransactionsForDebt = { debt ->
-                        debtViewModel.loadTransactions(debt)
-                            .observeAsState(emptyList())
-                    },
-                    onEdit = this::editDebt,
-                    onDelete = this::deleteDebt,
-                    onToggle = this::toggleDebt,
-                    onShare = { debt, exportFormat -> this.shareDebt(debt, exportFormat, null) },
-                    onTransactionClick = {
-                        showDetails(it)
-                    }
-                )
+                val grouped = if (sort == Sort.PAYEE_NAME) {
+                    debts.groupBy { it.payeeId }
+                        .takeIf { it.values.any { group -> group.size > 1 } }
+                } else null
+                if (grouped != null)
+                    GroupedDebtList(
+                        debts = grouped,
+                        loadTransactionsForDebt = { debt ->
+                            debtViewModel.loadTransactions(debt)
+                                .observeAsState(emptyList())
+                        },
+                        onEdit = this::editDebt,
+                        onDelete = this::deleteDebt,
+                        onToggle = this::toggleDebt,
+                        onShare = { debt, exportFormat ->
+                            this.shareDebt(
+                                debt,
+                                exportFormat,
+                                null
+                            )
+                        },
+                        onTransactionClick = {
+                            showDetails(it)
+                        }
+                    )
+                else
+                    DebtList(
+                        debts = debts,
+                        loadTransactionsForDebt = { debt ->
+                            debtViewModel.loadTransactions(debt)
+                                .observeAsState(emptyList())
+                        },
+                        onEdit = this::editDebt,
+                        onDelete = this::deleteDebt,
+                        onToggle = this::toggleDebt,
+                        onShare = { debt, exportFormat ->
+                            this.shareDebt(
+                                debt,
+                                exportFormat,
+                                null
+                            )
+                        },
+                        onTransactionClick = {
+                            showDetails(it)
+                        }
+                    )
             }
         }
     }
@@ -88,55 +128,129 @@ class DebtOverview : DebtActivity() {
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
         super.onPrepareOptionsMenu(menu)
-        menu.findItem(R.id.SHOW_ALL_COMMAND).let {
-            lifecycleScope.launch {
-                it.isChecked = debtViewModel.showAll().first()
-            }
+        lifecycleScope.launch {
+            menu.findItem(R.id.SHOW_ALL_COMMAND).isChecked = debtViewModel.showAll().first()
+            menu.findItem(R.id.SORT_MENU)?.subMenu
+                ?.findItem(debtViewModel.sortOrder().first().commandId)
+                ?.isChecked = true
         }
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if(item.itemId == R.id.SHOW_ALL_COMMAND) {
-            lifecycleScope.launch {
-                debtViewModel.persistShowAll(!item.isChecked)
-                invalidateOptionsMenu()
+        return when (item.itemId) {
+            R.id.SHOW_ALL_COMMAND -> {
+                lifecycleScope.launch {
+                    debtViewModel.persistShowAll(!item.isChecked)
+                    invalidateOptionsMenu()
+                }
+                true
             }
-            return true
+
+            R.id.SORT_LABEL_COMMAND, R.id.SORT_AMOUNT_COMMAND, R.id.SORT_PAYEE_NAME_COMMAND -> {
+                if (!item.isChecked) {
+                    Sort.fromCommandId(item.itemId)?.let {
+                        lifecycleScope.launch {
+                            debtViewModel.persistSortOrder(it)
+                            invalidateOptionsMenu()
+                        }
+                    }
+                }
+                true
+            }
+
+            else -> super.onOptionsItemSelected(item)
         }
-        return super.onOptionsItemSelected(item)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun GroupedDebtList(
+    debts: Map<Long, List<DisplayDebt>>,
+    loadTransactionsForDebt: @Composable (DisplayDebt) -> State<List<Transaction>>,
+    onEdit: (DisplayDebt) -> Unit = {},
+    onDelete: (DisplayDebt, Int) -> Unit = { _, _ -> },
+    onToggle: (DisplayDebt) -> Unit = {},
+    onShare: (DisplayDebt, DebtViewModel.ExportFormat) -> Unit = { _, _ -> },
+    onTransactionClick: (Long) -> Unit = {}
+) {
+    LazyColumn(
+        modifier = Modifier
+            .padding(horizontal = dimensionResource(id = R.dimen.padding_form)),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 8.dp)
+    ) {
+        debts.forEach { item ->
+            val list = item.value
+            val currencies = list.map { it.currency }.distinct()
+            stickyHeader {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(list.first().payeeName)
+                    if (currencies.size == 1) {
+                        ColoredAmountText(
+                            amount = list.sumOf { it.currentBalance },
+                            currency = currencies.first()
+                        )
+                    } else {
+                        ColoredAmountText(
+                            amount = list.sumOf { it.currentEquivalentBalance },
+                            currency = LocalHomeCurrency.current
+                        )
+                    }
+                }
+
+            }
+            items(item.value) {
+                val expandedState = rememberSaveable { mutableStateOf(false) }
+                val transactions =
+                    if (expandedState.value) loadTransactionsForDebt(it).value else emptyList()
+                DebtCard(
+                    debt = it,
+                    transactions = transactions,
+                    expanded = expandedState,
+                    onEdit = { onEdit(it) },
+                    onDelete = { count -> onDelete(it, count) },
+                    onToggle = { onToggle(it) },
+                    onShare = { format -> onShare(it, format) },
+                    onTransactionClick = onTransactionClick
+                )
+            }
+        }
     }
 }
 
 @Composable
 fun DebtList(
-    modifier: Modifier = Modifier,
-    debts: State<List<Debt>>,
-    loadTransactionsForDebt: @Composable (Debt) -> State<List<Transaction>>,
-    onEdit: (Debt) -> Unit = {},
-    onDelete: (Debt, Int) -> Unit = { _, _ -> },
-    onToggle: (Debt) -> Unit = {},
-    onShare: (Debt, DebtViewModel.ExportFormat) -> Unit = { _, _ -> },
+    debts: List<DisplayDebt>,
+    loadTransactionsForDebt: @Composable (DisplayDebt) -> State<List<Transaction>>,
+    onEdit: (DisplayDebt) -> Unit = {},
+    onDelete: (DisplayDebt, Int) -> Unit = { _, _ -> },
+    onToggle: (DisplayDebt) -> Unit = {},
+    onShare: (DisplayDebt, DebtViewModel.ExportFormat) -> Unit = { _, _ -> },
     onTransactionClick: (Long) -> Unit = {}
 ) {
     LazyColumn(
-        modifier = modifier
+        modifier = Modifier
             .padding(horizontal = dimensionResource(id = R.dimen.padding_form)),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
-        itemsIndexed(items = debts.value) { index, item ->
-            Timber.d("rendering item $index")
+        items(items = debts) {
             val expandedState = rememberSaveable { mutableStateOf(false) }
-            val transactions = if (expandedState.value)  loadTransactionsForDebt(item).value else emptyList()
+            val transactions =
+                if (expandedState.value) loadTransactionsForDebt(it).value else emptyList()
             DebtCard(
-                debt = item,
-                transactions =  transactions,
+                debt = it,
+                transactions = transactions,
                 expanded = expandedState,
-                onEdit = { onEdit(item) },
-                onDelete = { count-> onDelete(item, count) },
-                onToggle = { onToggle(item) },
-                onShare = { format -> onShare(item, format) },
+                onEdit = { onEdit(it) },
+                onDelete = { count -> onDelete(it, count) },
+                onToggle = { onToggle(it) },
+                onShare = { format -> onShare(it, format) },
                 onTransactionClick = onTransactionClick
             )
         }
@@ -145,37 +259,70 @@ fun DebtList(
 
 @Preview
 @Composable
+private fun GroupedDebtListPreview() {
+    Surface(modifier = Modifier.padding(8.dp)) {
+        GroupedDebtList(
+            debts = listOf(
+                DisplayDebt(
+                    id = 1,
+                    label = "Debt 1",
+                    description = "some description",
+                    payeeId = 1,
+                    amount = 4000,
+                    currency = CurrencyUnit.DebugInstance,
+                    date = LocalDate.now().toEpoch(),
+                    payeeName = "Joe Doe",
+                    sum = 3000
+                ),
+                DisplayDebt(
+                    id = 2,
+                    label = "Debt 2",
+                    description = "",
+                    payeeId = 1,
+                    amount = -500,
+                    currency = CurrencyUnit.DebugInstance,
+                    date = LocalDate.now().toEpoch(),
+                    payeeName = "Joe Doe",
+                    sum = -200
+                )
+            ).groupBy { it.payeeId},
+            loadTransactionsForDebt = {
+                remember { mutableStateOf(emptyList()) }
+            }
+        )
+    }
+}
+
+
+@Preview
+@Composable
 private fun DebtListPreview() {
     Surface(modifier = Modifier.padding(8.dp)) {
         DebtList(
-            debts = remember {
-                mutableStateOf(
-                    listOf(
-                        Debt(
-                            id = 1,
-                            label = "Debt 1",
-                            description = "some description",
-                            payeeId = 1,
-                            amount = 4000,
-                            currency = CurrencyUnit.DebugInstance,
-                            date = LocalDate.now().toEpoch(),
-                            payeeName = "Joe Doe",
-                            sum = 3000
-                        ),
-                        Debt(
-                            id = 2,
-                            label = "Debt 2",
-                            description = "",
-                            payeeId = 2,
-                            amount = -500,
-                            currency = CurrencyUnit.DebugInstance,
-                            date = LocalDate.now().toEpoch(),
-                            payeeName = "Klara Masterful",
-                            sum = -200
-                        )
-                    )
+            debts = listOf(
+                DisplayDebt(
+                    id = 1,
+                    label = "Debt 1",
+                    description = "some description",
+                    payeeId = 1,
+                    amount = 4000,
+                    currency = CurrencyUnit.DebugInstance,
+                    date = LocalDate.now().toEpoch(),
+                    payeeName = "Joe Doe",
+                    sum = 3000
+                ),
+                DisplayDebt(
+                    id = 2,
+                    label = "Debt 2",
+                    description = "",
+                    payeeId = 2,
+                    amount = -500,
+                    currency = CurrencyUnit.DebugInstance,
+                    date = LocalDate.now().toEpoch(),
+                    payeeName = "Klara Masterful",
+                    sum = -200
                 )
-            },
+            ),
             loadTransactionsForDebt = {
                 remember { mutableStateOf(emptyList()) }
             }

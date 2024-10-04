@@ -25,6 +25,7 @@ import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_UUID
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_VALUE_DATE
 import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_ARCHIVE
 import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_ARCHIVED
+import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_NONE
 import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_UNCOMMITTED
 import org.totschnig.myexpenses.provider.DatabaseConstants.TABLE_ACCOUNTS
 import org.totschnig.myexpenses.provider.DatabaseConstants.TABLE_CHANGES
@@ -53,7 +54,7 @@ fun SupportSQLiteDatabase.unarchive(
         TransactionProvider.pauseChangeTrigger(this)
         //parts are promoted to independence
         execSQL(
-            "UPDATE $TABLE_TRANSACTIONS SET $KEY_PARENTID = null WHERE $KEY_PARENTID = $rowIdSubSelect ",
+            "UPDATE $TABLE_TRANSACTIONS SET $KEY_PARENTID = null, $KEY_STATUS = $STATUS_NONE WHERE $KEY_PARENTID = $rowIdSubSelect ",
             arrayOf(uuid)
         )
         //Change is recorded
@@ -74,7 +75,8 @@ fun SupportSQLiteDatabase.unarchive(
     }
 }
 
-private const val ARCHIVE_SELECTION = "$KEY_ACCOUNTID = ? AND $KEY_PARENTID is null AND $KEY_STATUS != $STATUS_UNCOMMITTED AND $KEY_DATE > ? AND $KEY_DATE < ?"
+private const val ARCHIVE_SELECTION =
+    "$KEY_ACCOUNTID = ? AND $KEY_PARENTID is null AND $KEY_STATUS != $STATUS_UNCOMMITTED AND $KEY_DATE > ? AND $KEY_DATE < ?"
 
 private fun SupportSQLiteDatabase.archiveInfo(
     accountId: Long,
@@ -107,17 +109,48 @@ private fun Bundle.parseArchiveArguments() = Triple(
     BundleCompat.getSerializable(this, KEY_END, LocalDate::class.java)!!
 )
 
-fun SupportSQLiteDatabase.archive(extras: Bundle) {
+fun SupportSQLiteDatabase.archive(extras: Bundle): Long {
     val (accountId, start, end) = extras.parseArchiveArguments()
 
-    val (crStatus, archiveSum, archiveDate) = archiveInfo(accountId, start, end, false).use {
-        if (it.count > 1) throw IllegalStateException("Transactions in archive have different states.")
-        it.moveToFirst()
-        if (it.hasNested()) throw IllegalStateException("Nested archive is not supported.")
-        Triple(it.getString(0), it.getLong(2), it.getLong(3))
+    val (crStatus, archiveSum, archiveDate) = archiveInfo(
+        accountId,
+        start,
+        end,
+        false
+    ).use { cursor ->
+        when (cursor.count) {
+            0 -> throw IllegalStateException("No transactions to archive.")
+            1 -> {
+                cursor.moveToFirst()
+                if (cursor.hasNested()) throw IllegalStateException("Nested archive is not supported.")
+                Triple(cursor.getString(0), cursor.getLong(2), cursor.getLong(3))
+            }
+
+            2 -> {
+                val states = cursor.useAndMapToMap {
+                    it.getString(0) to Triple(
+                        it.hasNested(),
+                        it.getLong(2),
+                        it.getLong(3)
+                    )
+                }
+                if (states.any { it.value.first }) {
+                    throw IllegalStateException("Nested archive is not supported.")
+                }
+                if (!states.containsKey(CrStatus.VOID.name)) {
+                    throw IllegalStateException("Transactions in archive have different states.")
+                }
+                val archive = states.entries.first { it.key != CrStatus.VOID.name }
+                Triple(archive.key, archive.value.second, archive.value.third)
+            }
+
+            else -> {
+                throw IllegalStateException("Transactions in archive have different states.")
+            }
+        }
     }
 
-   safeUpdateWithSealed {
+    return safeUpdateWithSealed {
         val archiveId = insert(TABLE_TRANSACTIONS, ContentValues().apply {
             put(KEY_ACCOUNTID, accountId)
             put(KEY_DATE, archiveDate)
@@ -143,6 +176,7 @@ fun SupportSQLiteDatabase.archive(extras: Bundle) {
                 archiveId
             )
         )
+        archiveId
     }
 }
 

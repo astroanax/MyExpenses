@@ -8,15 +8,26 @@ import org.totschnig.myexpenses.util.enumValueOrDefault
 import org.totschnig.myexpenses.util.enumValueOrNull
 import java.time.LocalDate
 
-fun <T> Cursor.useAndMapToList(mapper: (Cursor) -> T) =
-    use {
-        it.asSequence.map(mapper).toList()
-    }
+fun <T> Cursor.useAndMapToOne(mapper: (Cursor) -> T) = use {
+    if (it.moveToFirst()) mapper(it) else null
+}
 
-fun <T> Cursor.useAndMapToSet(mapper: (Cursor) -> T) =
-    use {
-        it.asSequence.map(mapper).toSet()
+fun <T> Cursor.useAndMapToList(mapper: (Cursor) -> T) = use {
+    it.asSequence.map(mapper).toList()
+}
+
+fun <T> Cursor.useAndMapToSet(mapper: (Cursor) -> T) = use {
+    it.asSequence.map(mapper).toSet()
+}
+
+fun <K, V> Cursor.useAndMapToMap(mapper: (Cursor) -> Pair<K, V>) = use {
+    buildMap {
+        it.asSequence.forEach {
+            val (key, value) = mapper(it)
+            put(key, value)
+        }
     }
+}
 
 /**
  * requires the Cursor to be positioned BEFORE first row
@@ -32,8 +43,8 @@ fun Cursor.getString(column: String) = requireString(getColumnIndexOrThrow(colum
 fun Cursor.getInt(column: String) = getInt(getColumnIndexOrThrow(column))
 fun Cursor.getLong(column: String) = getLong(getColumnIndexOrThrow(column))
 fun Cursor.getDouble(column: String) = getDouble(getColumnIndexOrThrow(column))
-fun Cursor.getStringOrNull(column: String) =
-    getStringOrNull(getColumnIndexOrThrow(column))?.takeIf { it.isNotEmpty() }
+fun Cursor.getStringOrNull(column: String, allowEmpty: Boolean = false) =
+    getStringOrNull(getColumnIndexOrThrow(column))?.takeIf { allowEmpty || it.isNotEmpty() }
 
 fun Cursor.getIntOrNull(column: String) = getIntOrNull(getColumnIndexOrThrow(column))
 fun Cursor.getLongOrNull(column: String) = getLongOrNull(getColumnIndexOrThrow(column))

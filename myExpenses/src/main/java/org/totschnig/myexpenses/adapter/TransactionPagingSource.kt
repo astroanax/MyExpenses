@@ -18,8 +18,6 @@ import org.totschnig.myexpenses.BuildConfig
 import org.totschnig.myexpenses.db2.FLAG_NEUTRAL
 import org.totschnig.myexpenses.model.CurrencyContext
 import org.totschnig.myexpenses.preference.PrefHandler
-import org.totschnig.myexpenses.provider.DatabaseConstants
-import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_AMOUNT
 import org.totschnig.myexpenses.provider.DatabaseConstants.KEY_PARENTID
 import org.totschnig.myexpenses.provider.TransactionProvider
 import org.totschnig.myexpenses.provider.asSequence
@@ -102,25 +100,21 @@ open class TransactionPagingSource(
             var selection = "$KEY_PARENTID is null"
             var selectionArgs: Array<String>? = null
             if (!whereFilter.value.isEmpty) {
-                val selectionForParents =
-                    whereFilter.value.getSelectionForParents(DatabaseConstants.VIEW_EXTENDED)
+                val selectionForParents = whereFilter.value.getSelectionForParents()
                 if (selectionForParents.isNotEmpty()) {
                     selection += " AND $selectionForParents"
                     selectionArgs = whereFilter.value.getSelectionArgsIfNotEmpty(false)
                 }
             }
             val startTime = if (BuildConfig.DEBUG) Instant.now() else null
-            val sortBy = when (account.sortBy) {
-                KEY_AMOUNT -> "abs($KEY_AMOUNT)"
-                else -> account.sortBy
-            }
             val origList = withContext(Dispatchers.IO) {
                 contentResolver.query(
                     uri.withLimit(loadSize, position.coerceAtLeast(0)),
                     projection,
                     selection,
                     selectionArgs,
-                    "$sortBy ${account.sortDirection}", null
+                    account.sortOrder,
+                    null
                 )?.use { cursor ->
                     if (BuildConfig.DEBUG) {
                         val endTime = Instant.now()

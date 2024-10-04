@@ -110,7 +110,7 @@ fun Repository.loadTransactions(accountId: Long): List<Transaction> {
         immediatePersist = false,
         restoreFromPreferences = true
     ).whereFilter.takeIf { !it.isEmpty }?.let {
-        it.getSelectionForParents(VIEW_EXTENDED) to it.getSelectionArgs(false)
+        it.getSelectionForParents() to it.getSelectionArgs(false)
     }
     //noinspection Recycle
     return contentResolver.query(
@@ -149,7 +149,7 @@ fun Repository.getTransactionSum(account: DataBaseAccount, filter: WhereFilter? 
         "$KEY_ACCOUNTID = ? AND $WHERE_NOT_SPLIT_PART AND $WHERE_NOT_VOID"
     var selectionArgs: Array<String>? = arrayOf(account.id.toString())
     if (filter != null && !filter.isEmpty) {
-        selection += " AND " + filter.getSelectionForParents(VIEW_COMMITTED)
+        selection += " AND " + filter.getSelectionForParents()
         selectionArgs = joinArrays(selectionArgs, filter.getSelectionArgs(false))
     }
     return contentResolver.query(
@@ -167,13 +167,11 @@ fun Repository.getTransactionSum(account: DataBaseAccount, filter: WhereFilter? 
 fun Repository.archive(
     accountId: Long,
     range: Pair<LocalDate, LocalDate>
-) {
-    contentResolver.call(TransactionProvider.DUAL_URI, METHOD_ARCHIVE, null, Bundle().apply {
-        putLong(KEY_ACCOUNTID, accountId)
-        putSerializable(KEY_START, range.first)
-        putSerializable(KEY_END, range.second)
-    })
-}
+) = contentResolver.call(TransactionProvider.DUAL_URI, METHOD_ARCHIVE, null, Bundle().apply {
+    putLong(KEY_ACCOUNTID, accountId)
+    putSerializable(KEY_START, range.first)
+    putSerializable(KEY_END, range.second)
+})!!.getLong(KEY_TRANSACTIONID)
 
 fun Repository.unarchive(id: Long) {
     val ops = java.util.ArrayList<ContentProviderOperation>().apply {

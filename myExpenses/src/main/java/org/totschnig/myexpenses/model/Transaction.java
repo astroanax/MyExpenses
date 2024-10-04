@@ -53,12 +53,8 @@ import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_UUID;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.KEY_VALUE_DATE;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_NONE;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_UNCOMMITTED;
-import static org.totschnig.myexpenses.provider.DatabaseConstants.TABLE_TRANSACTIONS;
-import static org.totschnig.myexpenses.provider.DatabaseConstants.TRANSFER_AMOUNT;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.TRANSFER_CURRENCY;
-import static org.totschnig.myexpenses.provider.DatabaseConstants.VIEW_ALL;
 import static org.totschnig.myexpenses.provider.DatabaseConstants.VIEW_UNCOMMITTED;
-import static org.totschnig.myexpenses.provider.DbConstantsKt.checkSealedWithAlias;
 import static org.totschnig.myexpenses.provider.CursorExtKt.getLongOrNull;
 import static org.totschnig.myexpenses.provider.CursorExtKt.getString;
 import static org.totschnig.myexpenses.provider.CursorExtKt.getStringOrNull;
@@ -160,11 +156,12 @@ public class Transaction extends Model implements ITransaction {
   public static final Uri CONTENT_URI = TransactionProvider.TRANSACTIONS_URI;
   public static final Uri CALLER_IS_SYNC_ADAPTER_URI = UriExtKt.fromSyncAdapter(CONTENT_URI);
 
+  @NonNull
   public Money getAmount() {
     return amount;
   }
 
-  public void setAmount(Money amount) {
+  public void setAmount(@NonNull Money amount) {
     this.amount = amount;
   }
 
@@ -368,8 +365,8 @@ public class Transaction extends Model implements ITransaction {
     String[] projection = new String[]{KEY_ROWID, KEY_DATE, KEY_VALUE_DATE, KEY_AMOUNT, KEY_COMMENT, KEY_CATID,
         KEY_PATH, KEY_PAYEEID, KEY_PAYEE_NAME, KEY_TRANSFER_PEER, KEY_TRANSFER_ACCOUNT, TRANSFER_CURRENCY, KEY_DEBT_ID,
         KEY_ACCOUNTID, KEY_METHODID, KEY_PARENTID, KEY_CR_STATUS, KEY_REFERENCE_NUMBER, KEY_CURRENCY,
-        KEY_METHOD_LABEL, KEY_STATUS, TRANSFER_AMOUNT(VIEW_ALL), KEY_TEMPLATEID, KEY_UUID, KEY_ORIGINAL_AMOUNT, KEY_ORIGINAL_CURRENCY,
-        KEY_EQUIVALENT_AMOUNT, CATEGORY_ICON, checkSealedWithAlias(VIEW_ALL, TABLE_TRANSACTIONS)};
+        KEY_METHOD_LABEL, KEY_STATUS, KEY_TRANSFER_AMOUNT, KEY_TEMPLATEID, KEY_UUID, KEY_ORIGINAL_AMOUNT, KEY_ORIGINAL_CURRENCY,
+        KEY_EQUIVALENT_AMOUNT, CATEGORY_ICON, KEY_SEALED};
 
     Cursor c = contentResolver.query(
             TransactionProvider.EXTENDED_URI.buildUpon().appendPath(String.valueOf(id)).build(), projection, null, null, null);
@@ -408,7 +405,7 @@ public class Transaction extends Model implements ITransaction {
       t.setCrStatus(CrStatus.UNRECONCILED);
     }
     t.setMethodId(getLongOrNull(c, KEY_METHODID));
-    t.setMethodLabel(getStringOrNull(c, KEY_METHOD_LABEL));
+    t.setMethodLabel(getStringOrNull(c, KEY_METHOD_LABEL, false));
     t.setCatId(catId);
     t.setPayee(getString(c, KEY_PAYEE_NAME));
     t.setPayeeId(getLongOrNull(c, KEY_PAYEEID));

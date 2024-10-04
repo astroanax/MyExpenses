@@ -1,6 +1,5 @@
 package org.totschnig.myexpenses.activity
 
-import android.app.ProgressDialog
 import android.content.ComponentName
 import android.content.Intent
 import android.content.res.Configuration
@@ -104,6 +103,7 @@ import org.totschnig.myexpenses.dialog.MessageDialogFragment
 import org.totschnig.myexpenses.dialog.ProgressDialogFragment
 import org.totschnig.myexpenses.dialog.SortUtilityDialogFragment
 import org.totschnig.myexpenses.dialog.SortUtilityDialogFragment.OnConfirmListener
+import org.totschnig.myexpenses.dialog.progress.NewProgressDialogFragment
 import org.totschnig.myexpenses.dialog.select.SelectHiddenAccountDialogFragment
 import org.totschnig.myexpenses.dialog.select.SelectTransformToTransferTargetDialogFragment
 import org.totschnig.myexpenses.dialog.select.SelectTransformToTransferTargetDialogFragment.Companion.KEY_IS_INCOME
@@ -172,12 +172,16 @@ import org.totschnig.myexpenses.util.ui.asDateTimeFormatter
 import org.totschnig.myexpenses.util.ui.dateTimeFormatter
 import org.totschnig.myexpenses.util.ui.dateTimeFormatterLegacy
 import org.totschnig.myexpenses.viewmodel.AccountSealedException
+import org.totschnig.myexpenses.viewmodel.CompletedAction
 import org.totschnig.myexpenses.viewmodel.ContentResolvingAndroidViewModel.DeleteState.DeleteComplete
 import org.totschnig.myexpenses.viewmodel.ContentResolvingAndroidViewModel.DeleteState.DeleteProgress
 import org.totschnig.myexpenses.viewmodel.ExportViewModel
 import org.totschnig.myexpenses.viewmodel.KEY_ROW_IDS
+import org.totschnig.myexpenses.viewmodel.ModalProgressViewModel
 import org.totschnig.myexpenses.viewmodel.MyExpensesViewModel
+import org.totschnig.myexpenses.viewmodel.OpenAction
 import org.totschnig.myexpenses.viewmodel.RoadmapViewModel
+import org.totschnig.myexpenses.viewmodel.ShareAction
 import org.totschnig.myexpenses.viewmodel.SumInfo
 import org.totschnig.myexpenses.viewmodel.SumInfoLoaded
 import org.totschnig.myexpenses.viewmodel.SumInfoUnknown
@@ -197,9 +201,8 @@ import kotlin.math.sign
 const val DIALOG_TAG_OCR_DISAMBIGUATE = "DISAMBIGUATE"
 const val DIALOG_TAG_NEW_BALANCE = "NEW_BALANCE"
 
-@OptIn(ExperimentalFoundationApi::class)
 abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, ContribIFace,
-    OnConfirmListener {
+    OnConfirmListener, NewProgressDialogFragment.Host {
 
     override val fabActionName = "CREATE_TRANSACTION"
 
@@ -248,6 +251,7 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
     private val upgradeHandlerViewModel: UpgradeHandlerViewModel by viewModels()
     private val exportViewModel: ExportViewModel by viewModels()
     private val roadmapViewModel: RoadmapViewModel by viewModels()
+    private val progressViewModel: ModalProgressViewModel by viewModels()
 
     lateinit var binding: ActivityMainBinding
 
@@ -544,7 +548,7 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 exportViewModel.publishProgress.collect { progress ->
                     progress?.let {
-                        progressDialogFragment?.appendToMessage(progress)
+                        progressViewModel.appendToMessage(it)
                     }
                 }
             }
@@ -553,10 +557,37 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 exportViewModel.result.collect { result ->
-                    result?.let {
-                        progressDialogFragment?.onTaskCompleted()
-                        if (result.second.isNotEmpty()) {
-                            shareExport(result.first, result.second)
+                    result?.let { (exportFormat, documentList) ->
+                        val legacyShare =
+                            prefHandler.getBoolean(
+                                PrefKey.PERFORM_SHARE,
+                                false
+                            ) && shareTarget.isNotEmpty()
+                        val uriList = documentList.map { it.uri }
+                        progressViewModel.onTaskCompleted(
+                            buildList {
+                                if (!legacyShare && documentList.isNotEmpty()) {
+                                    if (exportFormat == ExportFormat.CSV) {
+                                        add(
+                                            OpenAction(
+                                                label = getString(R.string.menu_open),
+                                                mimeType = exportFormat.mimeType,
+                                                targets = uriList
+                                            )
+                                        )
+                                    }
+                                    add(
+                                        ShareAction(
+                                            label = getString(R.string.share),
+                                            mimeType = exportFormat.mimeType,
+                                            targets = uriList
+                                        )
+                                    )
+                                }
+                            }
+                        )
+                        if (legacyShare && documentList.isNotEmpty()) {
+                            shareExport(exportFormat, uriList)
                         }
                         exportViewModel.resultProcessed()
                     }
@@ -988,7 +1019,12 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
                                         icon = Icons.Filled.Loupe,
                                         label = R.string.details,
                                         command = "DETAILS"
-                                    ) { showDetails(transaction.id, transaction.isArchive) })
+                                    ) { showDetails(
+                                        transaction.id,
+                                        transaction.isArchive,
+                                        currentFilter.takeIf { transaction.isArchive },
+                                        currentAccount?.sortOrder.takeIf { transaction.isArchive }
+                                    ) })
                                     if (modificationAllowed) {
                                         if (transaction.isArchive) {
                                             add(MenuEntry(
@@ -1083,37 +1119,48 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
                                         subMenu = Menu(
                                             buildList {
                                                 if (transaction.catId != null && !transaction.isSplit) {
-                                                    add(MenuEntry(
-                                                        label = UiText.StringValue(
-                                                            transaction.categoryPath!!
-                                                        ),
-                                                        command = "FILTER_FOR_CATEGORY"
-                                                    ) {
-                                                        addFilterCriterion(
-                                                            CategoryCriterion(
-                                                                transaction.categoryPath,
-                                                                transaction.catId
-                                                            )
-                                                        )
-                                                    }
-                                                    )
-                                                }
-                                                if (transaction.payeeId != null) {
-                                                    add(
-                                                        MenuEntry(
+                                                    if (transaction.categoryPath != null) {
+                                                        add(MenuEntry(
                                                             label = UiText.StringValue(
-                                                                transaction.payee!!
+                                                                transaction.categoryPath
                                                             ),
-                                                            command = "FILTER_FOR_PAYEE"
+                                                            command = "FILTER_FOR_CATEGORY"
                                                         ) {
                                                             addFilterCriterion(
-                                                                PayeeCriterion(
-                                                                    transaction.payee,
-                                                                    transaction.payeeId
+                                                                CategoryCriterion(
+                                                                    transaction.categoryPath,
+                                                                    transaction.catId
                                                                 )
                                                             )
-                                                        }
-                                                    )
+                                                        })
+                                                    } else {
+                                                        CrashHandler.report(
+                                                            IllegalStateException("Category path is null")
+                                                        )
+                                                    }
+                                                }
+                                                if (transaction.payeeId != null) {
+                                                    if (transaction.payee != null) {
+                                                        add(
+                                                            MenuEntry(
+                                                                label = UiText.StringValue(
+                                                                    transaction.payee
+                                                                ),
+                                                                command = "FILTER_FOR_PAYEE"
+                                                            ) {
+                                                                addFilterCriterion(
+                                                                    PayeeCriterion(
+                                                                        transaction.payee,
+                                                                        transaction.payeeId
+                                                                    )
+                                                                )
+                                                            }
+                                                        )
+                                                    } else {
+                                                        CrashHandler.report(
+                                                            IllegalStateException("Payee is null")
+                                                        )
+                                                    }
                                                 }
                                                 if (transaction.methodId != null) {
                                                     val label =
@@ -1732,13 +1779,7 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
 
             R.id.CANCEL_CALLBACK_COMMAND -> finishActionMode()
 
-            R.id.OPEN_PDF_COMMAND -> startActivity(Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(
-                    ensureContentUri(Uri.parse(tag as String), this@BaseMyExpenses),
-                    "application/pdf"
-                )
-                setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }, R.string.no_app_handling_pdf_available)
+            R.id.OPEN_PDF_COMMAND -> startActionView(Uri.parse(tag as String), "application/pdf")
 
             R.id.SORT_COMMAND -> MenuDialog.build()
                 .menu(this, R.menu.accounts_sort)
@@ -1906,7 +1947,8 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
                             excludeFromTotals
                     }
                 }
-                menu.findItem(R.id.ARCHIVE_COMMAND)?.setEnabledAndVisible(!isAggregate && !sealed && hasItems)
+                menu.findItem(R.id.ARCHIVE_COMMAND)
+                    ?.setEnabledAndVisible(!isAggregate && !sealed && hasItems)
             }
             menu.findItem(R.id.SEARCH_COMMAND)?.let {
                 filterHandler.configureSearchMenu(it)
@@ -2325,12 +2367,10 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
         args.addFilter()
         supportFragmentManager.beginTransaction()
             .add(
-                ProgressDialogFragment.newInstance(
-                    getString(R.string.pref_category_title_export),
-                    null,
-                    ProgressDialog.STYLE_SPINNER,
-                    true
-                ), PROGRESS_TAG
+                NewProgressDialogFragment.newInstance(
+                    getString(R.string.pref_category_title_export)
+                ),
+                PROGRESS_TAG
             )
             .commitNow()
         exportViewModel.startExport(args)
@@ -2471,6 +2511,20 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
         }
     }
 
+    override fun onAction(action: CompletedAction, index: Int?) {
+        when (action) {
+            is ShareAction -> baseViewModel.share(
+                this,
+                action.targets,
+                "",
+                action.mimeType
+            )
+            is OpenAction -> startActionView(action.targets[index ?: 0], action.mimeType)
+
+            else -> {}
+        }
+    }
+
     private fun LiveData<Result<Unit>>.observeAndReportFailure() {
         observe(this@BaseMyExpenses) { result ->
             result.onFailure {
@@ -2506,6 +2560,14 @@ abstract class BaseMyExpenses : LaunchActivity(), OnDialogResultListener, Contri
 
     override fun onSortOrderConfirmed(sortedIds: LongArray) {
         viewModel.sortAccounts(sortedIds)
+    }
+
+    fun showTransactionFromIntent(extras: Bundle) {
+        val idFromNotification = extras.getLong(KEY_TRANSACTIONID, 0)
+        if (idFromNotification != 0L) {
+            showDetails(idFromNotification, false)
+            intent.removeExtra(KEY_TRANSACTIONID)
+        }
     }
 
     companion object {

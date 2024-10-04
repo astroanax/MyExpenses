@@ -50,7 +50,7 @@ data class ArchiveInfo(
     val statuses: List<CrStatus>
 ) : Parcelable {
     val canArchive: Boolean
-        get() = count > 0 && !hasNested && statuses.size == 1
+        get() = count > 0 && !hasNested && statuses.filter { it != CrStatus.VOID }.size <= 1
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,9 +126,7 @@ class ArchiveDialogFragment : ComposeBaseDialogFragment2() {
                         info.statuses.size > 1 -> stringResource(
                             R.string.warning_archive_inconsistent_state,
                             info.statuses.joinToString {
-                                getString(
-                                    it.toStringRes()
-                                )
+                                getString(it.toStringRes())
                             })
                         else -> throw IllegalStateException()
                     },

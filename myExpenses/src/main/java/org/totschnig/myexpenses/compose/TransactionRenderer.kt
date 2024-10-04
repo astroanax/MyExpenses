@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -74,8 +75,6 @@ import org.totschnig.myexpenses.model.Money
 import org.totschnig.myexpenses.model.Transfer
 import org.totschnig.myexpenses.provider.DatabaseConstants.SPLIT_CATID
 import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_ARCHIVE
-import org.totschnig.myexpenses.provider.DatabaseConstants.STATUS_HELPER
-import org.totschnig.myexpenses.viewmodel.data.Category.Companion.NO_CATEGORY_ASSIGNED_LABEL
 import org.totschnig.myexpenses.viewmodel.data.Transaction2
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -98,10 +97,6 @@ abstract class ItemRenderer(
     ) = buildAnnotatedString {
         if (isSplit) {
             append(context.getString(R.string.split_transaction))
-        } else if (forLegacy && !isTransfer && catId == null &&
-            status != STATUS_HELPER && status != STATUS_ARCHIVE
-        ) {
-            append(NO_CATEGORY_ASSIGNED_LABEL)
         } else {
             categoryPath?.let {
                 if (forLegacy) {
@@ -207,8 +202,6 @@ abstract class ItemRenderer(
     ) {
         val showMenu = remember { mutableStateOf(false) }
         val activatedBackgroundColor = colorResource(id = R.color.activatedBackground)
-        val voidMarkerHeight = with(LocalDensity.current) { 2.dp.toPx() }
-        val voidStatus = stringResource(id = R.string.status_void)
         Row(modifier = modifier
             .height()
             .conditional(selectionHandler?.isSelectable(transaction) == true,
@@ -216,7 +209,7 @@ abstract class ItemRenderer(
                     combinedClickable(
                         onLongClick = { selectionHandler!!.toggle(transaction) },
                         onClick = {
-                            if ( selectionHandler!!.selectionCount == 0) {
+                            if (selectionHandler!!.selectionCount == 0) {
                                 showMenu.value = true
                             } else {
                                 selectionHandler.toggle(transaction)
@@ -231,18 +224,7 @@ abstract class ItemRenderer(
             .conditional(selectionHandler?.isSelected(transaction) == true) {
                 background(activatedBackgroundColor)
             }
-            .conditional(transaction.crStatus == CrStatus.VOID) {
-                drawWithContent {
-                    drawContent()
-                    drawLine(
-                        Color.Red,
-                        Offset(0F, size.height / 2),
-                        Offset(size.width, size.height / 2),
-                        voidMarkerHeight
-                    )
-                }
-                    .semantics { contentDescription = voidStatus }
-            }
+            .voidMarker(transaction.crStatus)
             .padding(horizontal = mainScreenPadding, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -301,7 +283,11 @@ abstract class ItemRenderer(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    else -> Icon("minus")
+                    else -> Icon(
+                        imageVector = Icons.Filled.Remove,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -377,9 +363,14 @@ class CompactTransactionRenderer(
         val context = LocalContext.current
         val secondaryInfo = transaction.buildSecondaryInfo(context, true)
         val description = buildAnnotatedString {
-            append(transaction.buildPrimaryInfo(context, true))
+            val primaryInfo = transaction.buildPrimaryInfo(context, true)
+            if (primaryInfo.isNotEmpty()) {
+                append(primaryInfo)
+                if (secondaryInfo.first.isNotEmpty()) {
+                    append(COMMENT_SEPARATOR)
+                }
+            }
             secondaryInfo.first.takeIf { it.isNotEmpty() }?.let {
-                if (transaction.status != STATUS_ARCHIVE) append(COMMENT_SEPARATOR)
                 append(it)
             }
         }
@@ -481,6 +472,35 @@ fun Modifier.tagBorder(color: Color) =
     )
         .padding(vertical = 4.dp, horizontal = 6.dp)
 
+@Composable
+fun Modifier.voidMarker(crStatus: CrStatus): Modifier {
+    val voidMarkerHeight = with(LocalDensity.current) { 2.dp.toPx() }
+    val voidStatus = stringResource(id = R.string.status_void)
+    return conditional(crStatus == CrStatus.VOID) {
+        drawWithContent {
+            drawContent()
+            drawLine(
+                Color.Red,
+                Offset(0F, size.height / 2),
+                Offset(size.width, size.height / 2),
+                voidMarkerHeight
+            )
+        }
+            .semantics { contentDescription = voidStatus }
+    }
+}
+
+@Composable
+fun InlineChip(text: String, color: Color?) {
+    Text(
+        text = text,
+        modifier = Modifier
+            .tagBorder(color ?: MaterialTheme.colorScheme.onSurface)
+            .padding(bottom = 2.dp),
+        style = MaterialTheme.typography.bodySmall
+    )
+}
+
 @Preview
 @Composable
 private fun RenderNew(@PreviewParameter(SampleProvider::class) transaction: Transaction2) {
@@ -497,37 +517,27 @@ private fun RenderCompact(@PreviewParameter(SampleProvider::class) transaction: 
     ).Render(transaction)
 }
 
-@Composable
-fun InlineChip(text: String, color: Color?) {
-    Text(
-        text = text,
-        modifier = Modifier
-            .tagBorder(color ?: MaterialTheme.colorScheme.onSurface)
-            .padding(bottom = 2.dp),
-        style = MaterialTheme.typography.bodySmall
-    )
-}
-
 class SampleProvider : PreviewParameterProvider<Transaction2> {
     private val originalCurrency = CurrencyUnit("TRY", "₺", 2)
     override val values = sequenceOf(
         Transaction2(
             id = -1,
             _date = System.currentTimeMillis() / 1000,
-            amount = Money(CurrencyUnit.DebugInstance, 7000),
+            amount = Money(CurrencyUnit.DebugInstance, 8000),
             originalAmount = Money(originalCurrency, 1234500),
             methodLabel = "CHEQUE",
-            methodIcon = "credit-card",
+            //methodIcon = "credit-card",
             referenceNumber = "1",
             accountId = -1,
             catId = 1,
             categoryPath = "Obst und Gemüse",
             comment = "Erika Musterfrau",
-            icon = "apple",
+            //icon = "apple",
             year = 2022,
             month = 1,
             day = 1,
             week = 1,
+            crStatus = CrStatus.VOID,
             tagList = listOf(
                 Triple(1, "Hund", android.graphics.Color.RED),
                 Triple(2,"Katz", android.graphics.Color.GREEN)
